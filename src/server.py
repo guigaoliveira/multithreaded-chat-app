@@ -2,8 +2,12 @@ import socket
 from threading import Thread
 import re
 
-def int_to_bytes(val, num_bytes):
-    return [(val & (0xff << pos*8)) >> pos*8 for pos in range(num_bytes)]
+HOST = ''
+PORT = 9001
+BUFSIZ = 1024
+ADDR = (HOST, PORT)
+clients = {}
+
 
 def bytesFormat(data):
     return bytes(data, "utf-8")
@@ -77,13 +81,6 @@ def handle_messages(client):  # Takes client socket as argument.
             break
 
 
-clients = {}
-
-HOST = ''
-PORT = 9001
-BUFSIZ = 1024
-ADDR = (HOST, PORT)
-
 SERVER = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 SERVER.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 SERVER.bind(ADDR)
@@ -91,7 +88,6 @@ SERVER.bind(ADDR)
 if __name__ == "__main__":
     SERVER.listen(5)
     print("Waiting for connection...")
-    print(int_to_bytes(5, 2))
     ACCEPT_THREAD = Thread(target=handle_connections)
     ACCEPT_THREAD.start()
 
