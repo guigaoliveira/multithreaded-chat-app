@@ -1,12 +1,17 @@
 import socket
 from threading import Thread
 import re
+import utils
 
 HOST = ''
 PORT = 9001
-BUFSIZ = 1024
+BUFFER_SIZE = 1024
 ADDR = (HOST, PORT)
 clients = {}
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(ADDR)
 
 
 def bytesFormat(data):
@@ -14,88 +19,106 @@ def bytesFormat(data):
 
 
 def getKeyByValue(dict, value):
-    return list(dict.keys())[list(dict.values()).index(value)]
+    names = list(dict.values())
+    if(value in names):
+        return list(dict.keys())[names.index(value)]
+    return None
 
 
 def get_client_list(clients):
     result = ""
-    for client, name in clients.items():
-        host, port = client.getpeername()
+    for connection, name in clients.items():
+        host, port = connection.getpeername()
         result += f"<{name}, {host}, {port}>\n"
     return result[:-1]
 
 
-def broadcast(msg, prefix=""):  # prefix is for name identification.
-    """Broadcasts a message to all the clients."""
-    for sock in clients:
-        sock.send(bytesFormat(prefix) + msg)
+def broadcast(msg, prefix=""):
+    for connection in clients:
+        connection.send(utils.message_serialize(
+            "*", "", f"{prefix} escreveu: {msg}"))
 
 
-def handle_exit_request(client):
-    client.close()
-    name = clients[client]
-    del clients[client]
+def handle_exit_request(connection):
+    connection.close()
+    name = clients[connection]
+    del clients[connection]
     broadcast(bytesFormat(f"{name} saiu!"))
 
 
-def handle_private_message(msg):
-    match = re.search(r"privado\((\w+)\)", msg, re.IGNORECASE)
-    if match:
-        client_name = match.group(1)
-        return getKeyByValue(clients, client_name)
-    return None
+def handle_private_message(connection, client_name, nickname, data):
+    recipient_connection = getKeyByValue(clients, nickname)
+    if recipient_connection:
+        recipient_connection.send(utils.message_serialize(
+            nickname, "privado", data))
+    else:
+        connection.send(utils.message_serialize(
+            client_name, "-", f"O usuário {nickname} não existe."))
 
 
 def handle_connections():
-    """Sets up handling for incoming clients."""
     while True:
-        client, client_address = SERVER.accept()
-        print("%s:%s está conectado." % client_address)
-        client.send(bytesFormat("Digite seu nickname."))
-        Thread(target=handle_messages, args=(client,)).start()
+        connection, address = sock.accept()
+        print("%s:%s está conectado." % address)
+        Thread(target=handle_messages, args=(connection,)).start()
 
 
-def handle_messages(client):  # Takes client socket as argument.
-    """Handles a single client connection."""
-    name = client.recv(BUFSIZ).decode("utf8")
-    client.send(bytesFormat(
-        f"Seja bem vindo {name}! Para sair do chat, digite sair()."))
-    broadcast(bytesFormat(f"{name} entrou..."))
-    clients[client] = name
+def handle_messages(connection):
+    # provavelmente cada user deve ser único
+    connection.send(utils.message_serialize(
+        "-", "-", "Digite seu nome de usúario."))
+    nameInfo = utils.message_parser(
+        connection.recv(BUFFER_SIZE))
+
+    if nameInfo is None:
+        return
+
+    client_nickname = nameInfo.get("data", "")
+
+    connection.send(
+        utils.message_serialize(client_nickname, "",
+                                f"Seja bem vindo {client_nickname}! \
+                                Para sair do chat, digite sair()."))
+
+    broadcast(f"{client_nickname} entrou...", "O Servidor")
+
+    clients[connection] = client_nickname
 
     while True:
-        msg = client.recv(BUFSIZ)
-        msgStr = msg.decode("utf-8")
-        print(msg)
-        if msgStr != "sair()":
-            if msgStr == "lista()":
-                client.send(bytesFormat(get_client_list(clients)))
-                break
-            private_client = handle_private_message(msgStr)
-            if private_client:
-                private_client.send(bytesFormat("te mandaram um privado lek"))
-                break
-            broadcast(msg, name+": ")
-        else:
-            handle_exit_request(client)
-            break
+        msgInfo = utils.message_parser(connection.recv(BUFFER_SIZE))
 
+        if msgInfo is None:
+            continue
 
-SERVER = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-SERVER.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-SERVER.bind(ADDR)
+        msg_command = msgInfo.get("command", "")
+        msg_nickname = msgInfo.get("nickname", "")
+        msg_data = msgInfo.get("data", "")
+
+        if msg_nickname == "*":
+            broadcast(msg_data, client_nickname)
+        if msg_nickname == ">" and msg_command == "sair":
+            handle_exit_request(connection)
+        if msg_nickname == ">" and msg_command == "lista":
+            connection.send(bytesFormat(get_client_list(clients)))
+        if (msg_nickname != "*" or msg_nickname == ">") and msg_command == "privado":
+            handle_private_message(
+                connection, client_nickname, msg_nickname, msg_data)
+
 
 if __name__ == "__main__":
-    SERVER.listen(5)
-    print("Waiting for connection...")
-    ACCEPT_THREAD = Thread(target=handle_connections)
-    ACCEPT_THREAD.start()
+    sock.listen(5)
+    print("Esperando por uma conexão...")
+    connections_thread = Thread(target=handle_connections)
+    connections_thread.start()
 
     msg = input()
     while True:
         if(msg == "lista()"):
             print(get_client_list(clients))
+        """ if(msg == "sair()"):
+            for connection in clients:
+                connection.close() """
         msg = input()
 
-    ACCEPT_THREAD.join()
-    SERVER.close()
+    connections_thread.join()
+    sock.close()
