@@ -3,16 +3,6 @@ from threading import Thread
 import re
 import utils
 
-HOST = ''
-PORT = 9001
-BUFFER_SIZE = 1024
-ADDR = (HOST, PORT)
-clients = {}
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.bind(ADDR)
-
 
 def bytesFormat(data):
     return bytes(data, "utf-8")
@@ -33,92 +23,116 @@ def get_client_list(clients):
     return result[:-1]
 
 
-def broadcast(msg, prefix=""):
+def broadcast(msg, username=""):
     for connection in clients:
         connection.send(utils.message_serialize(
-            "*", "", f"{prefix} escreveu: {msg}"))
+            "*", "", f"[SALA] {username} escreveu: {msg}"))
 
 
-def handle_exit_request(connection):
+def handle_exit_request(connection, clients):
     connection.close()
     name = clients[connection]
     del clients[connection]
-    broadcast(bytesFormat(f"{name} saiu!"))
+    broadcast(f"{name} saiu!")
 
 
-def handle_private_message(connection, client_name, nickname, data):
-    recipient_connection = getKeyByValue(clients, nickname)
+def handle_private_message(connection, client_name, recipient_username, msg):
+    recipient_connection = getKeyByValue(clients, recipient_username)
+
     if recipient_connection:
         recipient_connection.send(utils.message_serialize(
-            nickname, "privado", data))
+            recipient_username, "privado", f"[PRIVADO] {client_name} escreveu: {msg}"))
     else:
         connection.send(utils.message_serialize(
-            client_name, "-", f"O usuário {nickname} não existe."))
+            client_name, "-", f"O usuário {recipient_username} não existe."))
 
 
-def handle_connections():
-    while True:
-        connection, address = sock.accept()
-        print("%s:%s está conectado." % address)
-        Thread(target=handle_messages, args=(connection,)).start()
-
-
-def handle_messages(connection):
+def get_username(connection, buffer_size):
     # provavelmente cada user deve ser único
     connection.send(utils.message_serialize(
         "-", "-", "Digite seu nome de usúario."))
-    nameInfo = utils.message_parser(
-        connection.recv(BUFFER_SIZE))
+    nameInfo = utils.message_parser(connection.recv(buffer_size))
 
     if nameInfo is None:
         return
 
-    client_nickname = nameInfo.get("data", "")
+    client_username = nameInfo.get("data", "")
 
-    connection.send(
-        utils.message_serialize(client_nickname, "",
-                                f"Seja bem vindo {client_nickname}! \
-                                Para sair do chat, digite sair()."))
+    return client_username
 
-    broadcast(f"{client_nickname} entrou...", "O Servidor")
 
-    clients[connection] = client_nickname
+def handle_messages(connection, clients):
+    BUFFER_SIZE = 1024
+    client_username = get_username(connection, BUFFER_SIZE)
+    welcome_msg = f"Seja bem vindo {client_username}! Para sair do chat, digite sair()."
+    connection.send(utils.message_serialize(client_username, "", welcome_msg))
+
+    broadcast(f"{client_username} entrou...", "O servidor")
+
+    clients[connection] = client_username
 
     while True:
-        msgInfo = utils.message_parser(connection.recv(BUFFER_SIZE))
+        try:
+            packet = connection.recv(BUFFER_SIZE)
 
-        if msgInfo is None:
-            continue
+            if not packet:
+                break
 
-        msg_command = msgInfo.get("command", "")
-        msg_nickname = msgInfo.get("nickname", "")
-        msg_data = msgInfo.get("data", "")
+            packetInfo = utils.message_parser(packet)
 
-        if msg_nickname == "*":
-            broadcast(msg_data, client_nickname)
-        if msg_nickname == ">" and msg_command == "sair":
-            handle_exit_request(connection)
-        if msg_nickname == ">" and msg_command == "lista":
-            connection.send(bytesFormat(get_client_list(clients)))
-        if (msg_nickname != "*" or msg_nickname == ">") and msg_command == "privado":
-            handle_private_message(
-                connection, client_nickname, msg_nickname, msg_data)
+            if packetInfo is None:
+                continue
+
+            command = packetInfo.get("command", "")
+            recipient_username = packetInfo.get("username", "")
+            payload = packetInfo.get("data", "")
+
+            if recipient_username == "*" and command == "-":
+                broadcast(payload, client_username)
+            if recipient_username == ">" and command == "sair":
+                handle_exit_request(connection, clients)
+            if recipient_username == ">" and command == "lista":
+                connection.send(utils.message_serialize(
+                    client_username, "lista", get_client_list(clients)))
+            if (recipient_username != "*" or recipient_username == ">") and command == "privado":
+                handle_private_message(
+                    connection, client_username, recipient_username, payload)
+        except socket.error:
+            break
+
+
+def handle_connections(clients):
+    while True:
+        connection, address = sock.accept()
+        print("%s:%s está conectado." % address)
+        Thread(target=handle_messages, args=(connection, clients,)).start()
+
+
+def handle_exit_command(clients):
+    for connection in clients:
+        connection.close()
+    clients.clear()
 
 
 if __name__ == "__main__":
+    HOST = ''
+    PORT = 9001
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((HOST, PORT))
     sock.listen(5)
     print("Esperando por uma conexão...")
-    connections_thread = Thread(target=handle_connections)
+    connections_thread = Thread(target=handle_connections, args=(clients, ))
     connections_thread.start()
-
-    msg = input()
+    keyboard_input = input()
+    clients = {}
     while True:
-        if(msg == "lista()"):
+        if(keyboard_input == "lista()"):
             print(get_client_list(clients))
-        """ if(msg == "sair()"):
-            for connection in clients:
-                connection.close() """
-        msg = input()
+        if(keyboard_input == "sair()"):
+            handle_exit_command(clients)
+        keyboard_input = input()
 
     connections_thread.join()
     sock.close()

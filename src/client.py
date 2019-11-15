@@ -1,9 +1,7 @@
-from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread
 import re
+import socket
 import utils
-
-PRIVATE_CHAT_REGEX = r"^privado\((.{1,15})\)\s(.*)$"
 
 
 class Send:
@@ -15,7 +13,6 @@ class Send:
     def put(self, msg):
         self.__msg = msg
         if self.con != None:
-            # envia um mensagem atravez de uma conexão socket
             self.con.send(self.__msg)
 
     def get(self):
@@ -24,32 +21,32 @@ class Send:
     def loop(self):
         return self.new
 
-# função esperar - Thread
-
 
 def esperar(tcp, send, host='localhost', port=9001):
     destino = (host, port)
     tcp.connect(destino)
 
+    print(f"Conectado a {host}:{port}.")
+    send.con = tcp
     while True:
-        print(f"Conectado a {host}:{port}.")
-        send.con = tcp
-        while True:
-            # aceita uma mensagem
+        try:
             msg = tcp.recv(1024)
             if not msg:
                 break
             msgDict = utils.message_parser(msg)
             if msgDict is not None:
                 print(msgDict.get("data", ""))
+        except socket.error:
+            print("O cliente foi desconectado do servidor =/")
+            break
 
 
 if __name__ == '__main__':
     # cria um socket
-    tcp = socket(AF_INET, SOCK_STREAM)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     send = Send()
     # cria um Thread e usa a função esperar com dois argumentos
-    processo = Thread(target=esperar, args=(tcp, send))
+    processo = Thread(target=esperar, args=(sock, send))
     processo.start()
 
     msg = input()
@@ -58,15 +55,17 @@ if __name__ == '__main__':
             send.put(utils.message_serialize('>', 'sair', ''))
         if(msg == "lista()"):
             send.put(utils.message_serialize('>', 'lista', ''))
-        match = re.search(PRIVATE_CHAT_REGEX, msg, re.IGNORECASE)
-        if match:
-            nickname = match.group(1)
-            data = match.group(2)
-            send.put(utils.message_serialize(nickname, 'privado', data))
         else:
-            send.put(utils.message_serialize('*', '-', msg))
+            PRIVATE_CHAT_REGEX = r"^privado\((.{1,15})\)\s(.*)$"
+            match = re.search(PRIVATE_CHAT_REGEX, msg, re.IGNORECASE)
+            if match:
+                nickname = match.group(1)
+                data = match.group(2)
+                send.put(utils.message_serialize(nickname, 'privado', data))
+            else:
+                send.put(utils.message_serialize('*', '-', msg))
         msg = input()
 
     processo.join()
-    tcp.close()
+    sock.close()
     exit()
