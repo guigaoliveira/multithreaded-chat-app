@@ -25,7 +25,6 @@ class Send:
 def esperar(tcp, send, host='localhost', port=9001):
     destino = (host, port)
     tcp.connect(destino)
-
     print(f"Conectado a {host}:{port}.")
     send.con = tcp
     while True:
@@ -53,6 +52,7 @@ if __name__ == '__main__':
     while True:
         if(msg == "sair()"):
             send.put(utils.message_serialize('>', 'sair', ''))
+            break
         if(msg == "lista()"):
             send.put(utils.message_serialize('>', 'lista', ''))
         else:

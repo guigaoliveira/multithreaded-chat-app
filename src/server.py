@@ -1,14 +1,33 @@
 import socket
-from threading import Thread
+from threading import Thread, Event
 import re
 import utils
+import sys
 
 
-def bytesFormat(data):
-    return bytes(data, "utf-8")
+class ClientDisconnection(Exception):
+    pass
 
 
-def getKeyByValue(dict, value):
+def create_socket(HOST='', PORT=9001):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((HOST, PORT))
+    sock.listen(5)
+    sock.settimeout(0.1)
+    return sock
+
+
+def read_socket_data(connection):
+    try:
+        BUFFER_SIZE = 1024
+        data = connection.recv(BUFFER_SIZE)
+        return data
+    except:
+        return None
+
+
+def get_key_by_value(dict, value):
     names = list(dict.values())
     if(value in names):
         return list(dict.keys())[names.index(value)]
@@ -17,122 +36,187 @@ def getKeyByValue(dict, value):
 
 def get_client_list(clients):
     result = ""
-    for connection, name in clients.items():
-        host, port = connection.getpeername()
-        result += f"<{name}, {host}, {port}>\n"
+    for connection, name in clients.copy().items():
+        try:
+            host, port = connection.getpeername()
+            result += f"<{name}, {host}, {port}>\n"
+        except:
+            del clients[connection]
     return result[:-1]
 
 
-def broadcast(msg, username=""):
-    for connection in clients:
-        connection.send(utils.message_serialize(
-            "*", "", f"[SALA] {username} escreveu: {msg}"))
+def broadcast_chat_message(clients, msg, nickname=""):
+    msg_to_send = f"[SALA] {nickname} escreveu: {msg}"
+    print(msg_to_send)
+    for connection in clients.copy():
+        try:
+            connection.send(utils.message_serialize("*", "", msg_to_send))
+        except:
+            del clients[connection]
 
 
-def handle_exit_request(connection, clients):
+def handle_client_exit_command(connection, clients, nickname_client):
+    print(f"O usuário *{nickname_client}* saiu do chat.")
     connection.close()
-    name = clients[connection]
-    del clients[connection]
-    broadcast(f"{name} saiu!")
+    broadcast_chat_message(clients, f"{nickname_client} saiu!", "O servidor")
 
 
-def handle_private_message(connection, client_name, recipient_username, msg):
-    recipient_connection = getKeyByValue(clients, recipient_username)
-
-    if recipient_connection:
-        recipient_connection.send(utils.message_serialize(
-            recipient_username, "privado", f"[PRIVADO] {client_name} escreveu: {msg}"))
-    else:
-        connection.send(utils.message_serialize(
-            client_name, "-", f"O usuário {recipient_username} não existe."))
-
-
-def get_username(connection, buffer_size):
-    # provavelmente cada user deve ser único
-    connection.send(utils.message_serialize(
-        "-", "-", "Digite seu nome de usúario."))
-    nameInfo = utils.message_parser(connection.recv(buffer_size))
-
-    if nameInfo is None:
+def handle_private_message(connection, nickname_client, nickname_recipient, msg):
+    try:
+        recipient_connection = get_key_by_value(clients, nickname_recipient)
+        if recipient_connection:
+            recipient_connection.send(utils.message_serialize(
+                nickname_recipient, "privado", f"[PRIVADO] {nickname_client} escreveu: {msg}"))
+        else:
+            connection.send(utils.message_serialize(
+                nickname_client, "-", f"O usuário {nickname_recipient} não existe."))
+    except:
         return
 
-    client_username = nameInfo.get("data", "")
 
-    return client_username
-
-
-def handle_messages(connection, clients):
-    BUFFER_SIZE = 1024
-    client_username = get_username(connection, BUFFER_SIZE)
-    welcome_msg = f"Seja bem vindo {client_username}! Para sair do chat, digite sair()."
-    connection.send(utils.message_serialize(client_username, "", welcome_msg))
-
-    broadcast(f"{client_username} entrou...", "O servidor")
-
-    clients[connection] = client_username
-
-    while True:
+def get_nickname_client(connection):
+    # provavelmente cada user deve ser único
+    is_valid_user = False
+    nickname_client = None
+    while not is_valid_user:
         try:
-            packet = connection.recv(BUFFER_SIZE)
+            connection.send(utils.message_serialize(
+                "-", "-", "Digite um nickname válido:"))
 
-            if not packet:
+            nameInfo = utils.message_parser(read_socket_data(connection))
+
+            if nameInfo is None:
                 break
 
-            packetInfo = utils.message_parser(packet)
+            nickname_client = nameInfo.get("data", "")
+            is_valid_user = not nickname_client in clients.values()
 
-            if packetInfo is None:
-                continue
+            if(is_valid_user):
+                return nickname_client
 
-            command = packetInfo.get("command", "")
-            recipient_username = packetInfo.get("username", "")
-            payload = packetInfo.get("data", "")
+            connection.send(utils.message_serialize(
+                "-", "-", "Um usuário com esse nickname já existe."))
+        except:
+            return None
 
-            if recipient_username == "*" and command == "-":
-                broadcast(payload, client_username)
-            if recipient_username == ">" and command == "sair":
-                handle_exit_request(connection, clients)
-            if recipient_username == ">" and command == "lista":
-                connection.send(utils.message_serialize(
-                    client_username, "lista", get_client_list(clients)))
-            if (recipient_username != "*" or recipient_username == ">") and command == "privado":
-                handle_private_message(
-                    connection, client_username, recipient_username, payload)
-        except socket.error:
+
+def send_welcome_msg_to_new_user(connection, nickname_client):
+    msg_welcome = f"Seja bem vindo {nickname_client}!\n" + \
+        "Para listar usuários, digite lista(); \n" + \
+        "Para sair do chat, digite sair();"
+    connection.send(utils.message_serialize(nickname_client, "", msg_welcome))
+    return nickname_client
+
+
+def notify_other_users_about_new_user(clients, nickname_client):
+    msg_notification = f"O usuário *{nickname_client}* entrou na sala."
+    print(msg_notification)
+    broadcast_chat_message(
+        clients, f"o usuário *{nickname_client}* entrou...", "O servidor")
+
+
+def perform_action_by_command(connection, clients, nickname_client, msg_info):
+    try:
+        command = msg_info.get("command", "")
+        nickname_recipient = msg_info.get("nickname", "")
+        payload = msg_info.get("data", "")
+
+        if nickname_recipient == "*" and command == "-":
+            broadcast_chat_message(clients, payload, nickname_client)
+        elif nickname_recipient == ">" and command == "sair":
+            raise ClientDisconnection("Cliente executou comando de saída")
+        elif nickname_recipient == ">" and command == "lista":
+            connection.send(utils.message_serialize(
+                nickname_client, "lista", get_client_list(clients)))
+        elif (nickname_recipient != "*" or nickname_recipient == ">") and command == "privado":
+            handle_private_message(
+                connection, nickname_client, nickname_recipient, payload)
+        else:
+            print(
+                f"O cliente *{nickname_client}* enviou um comando não reconhecido.")
+    except:
+        handle_client_exit_command(
+            connection, clients, nickname_client)
+
+
+def get_client_messages(connection, address, clients, stop_event):
+    try:
+        nickname_client = get_nickname_client(connection)
+        if nickname_client is None:
+            print("%s:%s está desconectado." % address)
+            return
+        clients[connection] = nickname_client
+
+        send_welcome_msg_to_new_user(connection, nickname_client)
+        notify_other_users_about_new_user(clients, nickname_client)
+
+        while not stop_event.is_set():
+            msg_info = utils.message_parser(read_socket_data(connection))
+
+            if msg_info is None:
+                raise ClientDisconnection('O cliente está desconectado.')
+
+            perform_action_by_command(
+                connection, clients, nickname_client, msg_info)
+    except:
+        handle_client_exit_command(
+            connection, clients, nickname_client)
+
+
+def get_new_connection(sock, clients, stop_event):
+    while not stop_event.is_set():
+        try:
+            connection, address = sock.accept()
+            print("%s:%s está conectado." % address)
+            get_messages_thread = Thread(target=get_client_messages, args=(
+                connection, address, clients, stop_event, ))
+            get_messages_thread.start()
+        except socket.timeout:
+            pass
+        except:
+            stop_event.set()
             break
 
 
-def handle_connections(clients):
-    while True:
-        connection, address = sock.accept()
-        print("%s:%s está conectado." % address)
-        Thread(target=handle_messages, args=(connection, clients,)).start()
-
-
-def handle_exit_command(clients):
+def run_server_exit_command(sock, clients):
     for connection in clients:
+        connection.shutdown(socket.SHUT_RDWR)
         connection.close()
     clients.clear()
+    stop_event.set()
+    sock.close()
 
 
-if __name__ == "__main__":
-    HOST = ''
-    PORT = 9001
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((HOST, PORT))
-    sock.listen(5)
-    print("Esperando por uma conexão...")
-    connections_thread = Thread(target=handle_connections, args=(clients, ))
-    connections_thread.start()
+def get_and_run_server_commands(sock, clients):
     keyboard_input = input()
-    clients = {}
     while True:
         if(keyboard_input == "lista()"):
             print(get_client_list(clients))
-        if(keyboard_input == "sair()"):
-            handle_exit_command(clients)
+        elif(keyboard_input == "sair()"):
+            run_server_exit_command(sock, clients)
+            break
+        else:
+            print("Comando não reconhecido pelo servidor.")
         keyboard_input = input()
 
-    connections_thread.join()
+
+def on_forced_exit():
+    stop_event.set()
     sock.close()
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    sock = create_socket()
+    print("Esperando por uma conexão...")
+    clients = {}
+    try:
+        stop_event = Event()
+        connections_thread = Thread(target=get_new_connection, args=(
+            sock, clients, stop_event, ))
+        connections_thread.start()
+        get_and_run_server_commands(sock, clients)
+        connections_thread.join()
+        on_forced_exit()
+    except:
+        on_forced_exit()
