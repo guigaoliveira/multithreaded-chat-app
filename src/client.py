@@ -18,9 +18,9 @@ def create_connection(socket, HOST='', PORT=9001):
         return None
 
 
-def handle_disconnection(stop_event):
-    stop_event.set()
-    print("Cliente está desconectado do servidor.")
+def handle_disconnection(connection, stop_event):
+    util.on_forced_exit(connection, stop_event)
+    print("O cliente está desconectado do servidor.")
 
 
 def get_messages(connection, stop_event):
@@ -28,7 +28,6 @@ def get_messages(connection, stop_event):
         try:
             msg = connection.recv(1024)
             if not msg:
-                handle_disconnection(stop_event)
                 break
             msg_info = util.message_parser(msg)
             if msg_info is not None:
@@ -45,7 +44,7 @@ def send_messages(connection, stop_event):
         while not stop_event.is_set():
             if(keyboard_input == "sair()"):
                 connection.send(util.message_serialize('>', 'sair', ''))
-                handle_disconnection(stop_event)
+                handle_disconnection(connection, stop_event)
                 break
             elif(keyboard_input == "lista()"):
                 connection.send(util.message_serialize('>', 'lista', ''))
@@ -61,13 +60,15 @@ def send_messages(connection, stop_event):
                         '*', '-', keyboard_input))
             keyboard_input = input()
     except:
-        handle_disconnection(stop_event)
+        handle_disconnection(connection, stop_event)
 
 
 if __name__ == '__main__':
     connection = create_connection(socket)
     stop_event = Event()
     signal.signal(signal.SIGTSTP,
+                  util.on_forced_exit(connection, stop_event))
+    signal.signal(signal.SIGINT,
                   util.on_forced_exit(connection, stop_event))
     if connection is not None:
         try:
@@ -78,6 +79,4 @@ if __name__ == '__main__':
             thread_connections.start()
             thread_connections.join()
         except:
-            stop_event.set()
-            connection.close()
-            sys.exit(0)
+            util.on_forced_exit(connection, stop_event)

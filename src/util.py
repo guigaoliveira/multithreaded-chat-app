@@ -5,7 +5,7 @@ def utf8len(s):
     return len(s.encode('utf-8'))
 
 
-def message_serialize(nickname, command, data):
+def message_serialize(nickname, command, data=''):
     HEADER_LENGTH = 24
     return b"".join([
         (f"{(len(data) + HEADER_LENGTH)}").encode(),
@@ -16,8 +16,10 @@ def message_serialize(nickname, command, data):
 
 
 def validate_data(messageDataList):
+
     if len(messageDataList) != 4:
         return False
+
     msgLength, nickname, command, _ = messageDataList
     MSG_MAX_LENGTH = 2  # o header já é maior que 2 bytes
     NICKNAME_MAX_LENGTH = 15
@@ -28,19 +30,23 @@ def validate_data(messageDataList):
 
 
 def message_parser(message):
+
     if not message or message is None:
         return None
-    msg_utf8 = message.decode("utf-8")
-    messageDataList = [msg_utf8[0:2]] + msg_utf8[2:].split("\0")
-    if validate_data(messageDataList):
-        msgLength, nickname, command, data = messageDataList
-        return {
-            "msgLength": msgLength,
-            "nickname": nickname.rstrip('&'),
-            "command": command.rstrip('&'),
-            "data": data
-        }
-    return None
+
+    message_in_utf8 = message.decode("utf-8")
+    messageDataList = [message_in_utf8[0:2]] + message_in_utf8[2:].split("\0")
+
+    if not validate_data(messageDataList):
+        return None
+
+    msgLength, nickname, command, data = messageDataList
+    return {
+        "msgLength": msgLength,
+        "nickname": nickname.rstrip('&'),
+        "command": command.rstrip('&'),
+        "data": data
+    }
 
 
 def on_forced_exit(connection, stop_event):

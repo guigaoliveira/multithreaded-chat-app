@@ -3,8 +3,9 @@ from src import util
 
 def test_message_parser():
     assert util.message_parser(
-        "3\x00guilherme\x00sair()\x00ola") == {'msgLength': '3', 'nickname':
-                                               'guilherme',
-                                               'command': 'sair()',
-                                               'data': 'ola'
-                                               }
+        b"50-&&&&&&&&&&&&&&\x00-&&&&&&\x00Digite um nickname v\xc3\xa1lido:") \
+        == {'msgLength': '50', 'nickname':
+            '-',
+            'command': '-',
+            'data': 'Digite um nickname válido:'
+            }

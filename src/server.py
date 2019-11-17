@@ -46,12 +46,12 @@ def get_client_list(clients):
     return result[:-1]
 
 
-def broadcast_chat_message(clients, msg, nickname=""):
-    msg_to_send = f"[SALA] {nickname} escreveu: {msg}"
-    print(msg_to_send)
+def broadcast_chat_message(clients, message, nickname=""):
+    formated_message = f"[SALA] {nickname} escreveu: {message}"
+    print(formated_message)
     for connection in clients.copy():
         try:
-            connection.send(util.message_serialize("*", "", msg_to_send))
+            connection.send(util.message_serialize("*", "", formated_message))
         except:
             del clients[connection]
 
@@ -62,14 +62,16 @@ def handle_client_exit_command(connection, clients, nickname_client):
     broadcast_chat_message(clients, f"{nickname_client} saiu!", "O servidor")
 
 
-def handle_private_message(connection, nickname_client, nickname_recipient, msg):
+def handle_private_message(connection, nickname_client, nickname_recipient, message):
     recipient_connection = get_key_by_value(clients, nickname_recipient)
     if recipient_connection:
+        private_message = f"[PRIVADO] {nickname_client} escreveu: {message}"
         recipient_connection.send(util.message_serialize(
-            nickname_recipient, "privado", f"[PRIVADO] {nickname_client} escreveu: {msg}"))
+            nickname_recipient, "privado", private_message))
     else:
+        user_not_exist_message = f"O servidor escreveu: o usuário {nickname_recipient} não existe."
         connection.send(util.message_serialize(
-            nickname_client, "-", f"O usuário {nickname_recipient} não existe."))
+            nickname_client, "-", user_not_exist_message))
 
 
 def get_nickname_client(connection):
@@ -98,7 +100,7 @@ def get_nickname_client(connection):
             return None
 
 
-def send_welcome_msg_to_new_user(connection, nickname_client):
+def send_welcome_to_new_user(connection, nickname_client):
     msg_welcome = f"Seja bem vindo {nickname_client}!\n" + \
         "Para listar usuários, digite lista(); \n" + \
         "Para sair do chat, digite sair();"
@@ -107,17 +109,17 @@ def send_welcome_msg_to_new_user(connection, nickname_client):
 
 
 def notify_other_users_about_new_user(clients, nickname_client):
-    msg_notification = f"O usuário *{nickname_client}* entrou na sala."
-    print(msg_notification)
+    notification_message = f"O usuário *{nickname_client}* entrou na sala."
+    print(notification_message)
     broadcast_chat_message(
         clients, f"o usuário *{nickname_client}* entrou...", "O servidor")
 
 
-def perform_action_by_command(connection, clients, nickname_client, msg_info):
+def perform_action_by_command(connection, clients, nickname_client, message_information):
     try:
-        command = msg_info.get("command", "")
-        nickname_recipient = msg_info.get("nickname", "")
-        payload = msg_info.get("data", "")
+        command = message_information.get("command", "")
+        nickname_recipient = message_information.get("nickname", "")
+        payload = message_information.get("data", "")
 
         if nickname_recipient == "*" and command == "-":
             broadcast_chat_message(clients, payload, nickname_client)
@@ -145,17 +147,18 @@ def get_client_messages(connection, address, clients, stop_event):
             return
         clients[connection] = nickname_client
 
-        send_welcome_msg_to_new_user(connection, nickname_client)
+        send_welcome_to_new_user(connection, nickname_client)
         notify_other_users_about_new_user(clients, nickname_client)
 
         while not stop_event.is_set():
-            msg_info = util.message_parser(read_socket_data(connection))
+            message_information = util.message_parser(
+                read_socket_data(connection))
 
-            if msg_info is None:
+            if message_information is None:
                 raise ClientDisconnection('O cliente está desconectado.')
 
             perform_action_by_command(
-                connection, clients, nickname_client, msg_info)
+                connection, clients, nickname_client, message_information)
     except:
         handle_client_exit_command(
             connection, clients, nickname_client)
@@ -210,14 +213,13 @@ if __name__ == "__main__":
     clients = {}
     stop_event = Event()
     signal.signal(signal.SIGTSTP, util.on_forced_exit(sock, stop_event))
-
+    signal.signal(signal.SIGINT, util.on_forced_exit(sock, stop_event))
     try:
 
-        connections_thread = Thread(target=get_new_connection, args=(
-            sock, clients, stop_event, ))
-        connections_thread.start()
+        Thread(target=get_new_connection, args=(
+            sock, clients, stop_event, ), daemon=True).start()
         get_and_run_server_commands(sock, clients)
-        connections_thread.join()
+
         util.on_forced_exit(sock, stop_event)
     except:
         util.on_forced_exit(sock, stop_event)
