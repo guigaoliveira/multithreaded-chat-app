@@ -1,71 +1,82 @@
-from threading import Thread
+from threading import Thread, Event
 import re
 import socket
 import utils
+import sys
 
 
-class Send:
-    def __init__(self):
-        self.__msg = ''
-        self.new = True
-        self.con = None
-
-    def put(self, msg):
-        self.__msg = msg
-        if self.con != None:
-            self.con.send(self.__msg)
-
-    def get(self):
-        return self.__msg
-
-    def loop(self):
-        return self.new
+def create_connection(socket, HOST='', PORT=9001):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.1)
+        sock.connect((HOST, PORT))
+        print(f"Conectado a {HOST}:{PORT}.")
+        return sock
+    except socket.error:
+        print("Não foi possível conectar ao servidor {HOST}:{PORT}.")
+        return None
 
 
-def esperar(tcp, send, host='localhost', port=9001):
-    destino = (host, port)
-    tcp.connect(destino)
-    print(f"Conectado a {host}:{port}.")
-    send.con = tcp
-    while True:
+def handle_disconnection(stop_event):
+    stop_event.set()
+    print("Cliente está desconectado do servidor.")
+
+
+def get_messages(connection, stop_event):
+    while not stop_event.is_set():
         try:
-            msg = tcp.recv(1024)
+            msg = connection.recv(1024)
             if not msg:
+                handle_disconnection(stop_event)
                 break
-            msgDict = utils.message_parser(msg)
-            if msgDict is not None:
-                print(msgDict.get("data", ""))
-        except socket.error:
-            print("O cliente foi desconectado do servidor =/")
+            msg_info = utils.message_parser(msg)
+            if msg_info is not None:
+                print(msg_info.get("data", ""))
+        except socket.timeout:
+            pass
+        except:
             break
+
+
+def send_messages(connection, stop_event):
+    keyboard_input = input()
+    try:
+        while not stop_event.is_set():
+            if(keyboard_input == "sair()"):
+                connection.send(utils.message_serialize('>', 'sair', ''))
+                handle_disconnection(stop_event)
+                break
+            elif(keyboard_input == "lista()"):
+                connection.send(utils.message_serialize('>', 'lista', ''))
+            else:
+                PRIVATE_CHAT_REGEX = r"^privado\((.{1,16})\)\s(.*)$"
+                match = re.search(PRIVATE_CHAT_REGEX,
+                                  keyboard_input, re.IGNORECASE)
+                if match:
+                    nickname = match.group(1)
+                    data = match.group(2)
+                    connection.send(utils.message_serialize(
+                        nickname, 'privado', data))
+                else:
+                    connection.send(utils.message_serialize(
+                        '*', '-', keyboard_input))
+            keyboard_input = input()
+    except:
+        handle_disconnection(stop_event)
 
 
 if __name__ == '__main__':
-    # cria um socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    send = Send()
-    # cria um Thread e usa a função esperar com dois argumentos
-    processo = Thread(target=esperar, args=(sock, send))
-    processo.start()
-
-    msg = input()
-    while True:
-        if(msg == "sair()"):
-            send.put(utils.message_serialize('>', 'sair', ''))
-            break
-        if(msg == "lista()"):
-            send.put(utils.message_serialize('>', 'lista', ''))
-        else:
-            PRIVATE_CHAT_REGEX = r"^privado\((.{1,15})\)\s(.*)$"
-            match = re.search(PRIVATE_CHAT_REGEX, msg, re.IGNORECASE)
-            if match:
-                nickname = match.group(1)
-                data = match.group(2)
-                send.put(utils.message_serialize(nickname, 'privado', data))
-            else:
-                send.put(utils.message_serialize('*', '-', msg))
-        msg = input()
-
-    processo.join()
-    sock.close()
-    exit()
+    connection = create_connection(socket)
+    if connection is not None:
+        try:
+            stop_event = Event()
+            thread_connections = Thread(
+                target=get_messages, args=(connection, stop_event, ))
+            Thread(
+                target=send_messages, args=(connection, stop_event, ), daemon=True).start()
+            thread_connections.start()
+            thread_connections.join()
+        except:
+            stop_event.set()
+            connection.close()
+            sys.exit(0)
