@@ -1,8 +1,9 @@
 from threading import Thread, Event
 import re
 import socket
-import utils
+import util
 import sys
+import signal
 
 
 def create_connection(socket, HOST='', PORT=9001):
@@ -29,7 +30,7 @@ def get_messages(connection, stop_event):
             if not msg:
                 handle_disconnection(stop_event)
                 break
-            msg_info = utils.message_parser(msg)
+            msg_info = util.message_parser(msg)
             if msg_info is not None:
                 print(msg_info.get("data", ""))
         except socket.timeout:
@@ -43,22 +44,20 @@ def send_messages(connection, stop_event):
     try:
         while not stop_event.is_set():
             if(keyboard_input == "sair()"):
-                connection.send(utils.message_serialize('>', 'sair', ''))
+                connection.send(util.message_serialize('>', 'sair', ''))
                 handle_disconnection(stop_event)
                 break
             elif(keyboard_input == "lista()"):
-                connection.send(utils.message_serialize('>', 'lista', ''))
+                connection.send(util.message_serialize('>', 'lista', ''))
             else:
                 PRIVATE_CHAT_REGEX = r"^privado\((.{1,16})\)\s(.*)$"
-                match = re.search(PRIVATE_CHAT_REGEX,
-                                  keyboard_input, re.IGNORECASE)
-                if match:
-                    nickname = match.group(1)
-                    data = match.group(2)
-                    connection.send(utils.message_serialize(
+                groups_values = re.findall(PRIVATE_CHAT_REGEX, keyboard_input)
+                if len(groups_values):
+                    nickname, data = groups_values[0]
+                    connection.send(util.message_serialize(
                         nickname, 'privado', data))
                 else:
-                    connection.send(utils.message_serialize(
+                    connection.send(util.message_serialize(
                         '*', '-', keyboard_input))
             keyboard_input = input()
     except:
@@ -67,9 +66,11 @@ def send_messages(connection, stop_event):
 
 if __name__ == '__main__':
     connection = create_connection(socket)
+    stop_event = Event()
+    signal.signal(signal.SIGTSTP,
+                  util.on_forced_exit(connection, stop_event))
     if connection is not None:
         try:
-            stop_event = Event()
             thread_connections = Thread(
                 target=get_messages, args=(connection, stop_event, ))
             Thread(

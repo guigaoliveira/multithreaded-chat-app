@@ -41,3 +41,12 @@ def message_parser(message):
             "data": data
         }
     return None
+
+
+def on_forced_exit(connection, stop_event):
+    def signal_handler(sig, frame):
+        stop_event.set()
+        connection.close()
+        sys.exit(0)
+
+    return signal_handler
